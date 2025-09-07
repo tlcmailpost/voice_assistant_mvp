@@ -3,4 +3,10 @@ twilio==9.2.3
 openai>=1.40.0
 gunicorn==21.2.0
 requests==2.32.3
+dateparser==1.2.0
+pytz==2024.1
+phonenumbers==8.13.43
+google-api-python-client==2.136.0
+google-auth==2.33.0
+google-auth-oauthlib==1.2.1
 
