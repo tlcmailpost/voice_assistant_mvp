@@ -44,6 +44,19 @@ dialog = MedDialog() if HAVE_MED and MedDialog else None
 @app.route("/", methods=["GET"])
 def home():
     return "✅ Voice Assistant is running!"
+@app.route("/debug/google")
+def debug_google():
+    import os
+    cid  = os.environ.get("GOOGLE_CLIENT_ID", "")
+    csec = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    redir = os.environ.get("GOOGLE_REDIRECT_URI", "")
+    def mask(s):
+        return (s[:8] + "…" + s[-8:]) if len(s) > 20 else (s or "(empty)")
+    body = []
+    body.append("GOOGLE_CLIENT_ID: " + mask(cid))
+    body.append("GOOGLE_CLIENT_SECRET: " + mask(csec))
+    body.append("GOOGLE_REDIRECT_URI: " + (redir or "(empty)"))
+    return "\n".join(body), 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 @app.route("/twilio-voice", methods=["GET", "POST"])
 def twilio_voice():
