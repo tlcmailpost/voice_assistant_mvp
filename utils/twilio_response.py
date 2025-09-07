@@ -1,16 +1,11 @@
-from flask import request
-from utils.openai_gpt import get_gpt_response
 from twilio.twiml.voice_response import VoiceResponse
 
-def handle_call():
-    """Обработка входящего звонка от Twilio"""
-    prompt = request.values.get("SpeechResult", "")
-    print(f"User said: {prompt}")
-
-    response_text = get_gpt_response(prompt)
-    print(f"GPT response: {response_text}")
-
-    resp = VoiceResponse()
-    resp.say(response_text, voice='alice', language='en-US')
-    return str(resp)
-
+def create_twiml_response(text: str) -> str:
+    """
+    Создаёт TwiML-ответ для звонка в Twilio.
+    :param text: Текст, который будет произнесён голосом Alice.
+    :return: XML-строка (TwiML).
+    """
+    response = VoiceResponse()
+    response.say(text, voice="alice", language="en-US")
+    return str(response)
