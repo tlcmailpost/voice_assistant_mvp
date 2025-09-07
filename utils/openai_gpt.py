@@ -20,3 +20,4 @@ def get_gpt_response(prompt: str) -> str:
     except Exception as e:
         return f"Ошибка вызова модели: {e}"
 
+
