@@ -1,4 +1,4 @@
-# app.py — CLEAN SAFE BOOT
+# app.py — HARD-SET SECRET (clean safe boot)
 import os
 from flask import Flask, request, Response, redirect, session
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -6,34 +6,26 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # -------------------- Flask app + proxy & session config --------------------
 app = Flask(__name__)
 
-# Доверяем прокси Render (чтобы request.url был https) и явно задаём https
+# доверяем прокси Render (https) и явно https-схему
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 app.config["PREFERRED_URL_SCHEME"] = "https"
 
-# СЕКРЕТ ДЛЯ СЕССИЙ — ОБЯЗАТЕЛЬНО ДО ЛЮБЫХ @app.route
-env_secret = os.environ.get("FLASK_SECRET_KEY")
-if env_secret and env_secret.strip():
-    app.secret_key = env_secret.strip()
-    app.config["SECRET_KEY"] = app.secret_key
-else:
-    # Подстраховка: сгенерируем временный ключ, чтобы сервер не падал.
-    # (Но рекомендуем задать FLASK_SECRET_KEY в Render → Environment.)
-    gen = os.urandom(32)
-    app.secret_key = gen
-    app.config["SECRET_KEY"] = app.secret_key
-    print("[flask] WARNING: FLASK_SECRET_KEY отсутствует; использую временный ключ")
-
+# Жёсткий секрет как запасной (чтобы точно не падало)
+HARD_SECRET = "vK7!qD9#sYp$3Lx@0ZnF4hGt8Rb^2MwUjE1oCk&Va5Tr*NpXgHdWlQfZy!BmRs"
+env_secret = (os.environ.get("FLASK_SECRET_KEY") or "").strip()
+final_secret = env_secret or HARD_SECRET
+app.secret_key = final_secret
+app.config["SECRET_KEY"] = final_secret
 app.config.update(
-    SESSION_COOKIE_SECURE=True,   # cookie только по https
-    SESSION_COOKIE_SAMESITE="Lax"
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SAMESITE="Lax",
 )
-# ---------------------------------------------------------------------------
+print(f"[flask] SECRET from env? {'yes' if env_secret else 'no (using hard)'}")
 
 # ----------------------------- Optional imports ----------------------------
 from utils.openai_gpt import get_gpt_response
 from utils.twilio_response import create_twiml_response
 
-# Диалог (медицинский) — по возможности
 try:
     from utils.dialog_medical import MedDialog
     HAVE_MED = True
@@ -42,7 +34,6 @@ except Exception as e:
     MedDialog = None
     HAVE_MED = False
 
-# Google OAuth/Calendar — по возможности
 try:
     from utils.google_oauth import build_flow, save_creds, load_creds
     from utils.calendar import create_event
@@ -52,7 +43,6 @@ except Exception as e:
     build_flow = save_creds = load_creds = create_event = None
     HAVE_GOOGLE = False
 
-# SMS — по возможности
 try:
     from utils.sms import send_sms
     HAVE_SMS = True
@@ -60,21 +50,19 @@ except Exception as e:
     print(f"[boot] sms not available: {e}")
     def send_sms(*args, **kwargs): return False
     HAVE_SMS = False
-# ---------------------------------------------------------------------------
 
 # ------------------------------- App settings ------------------------------
 ECHO_MODE = os.environ.get("ECHO_MODE", "0") == "1"
 APP_BASE = os.environ.get("APP_BASE_URL", "https://voice-assistant-mvp-9.onrender.com")
 CLINIC_NAME = os.environ.get("CLINIC_NAME", "Клиника")
-
 dialog = MedDialog() if HAVE_MED and MedDialog else None
-# ---------------------------------------------------------------------------
 
 # ------------------------------- Diagnostics -------------------------------
 @app.route("/debug/secret")
 def debug_secret():
     sk = app.config.get("SECRET_KEY")
-    return ("SECRET_SET=True" if sk else "SECRET_SET=False"), 200, {
+    src = "env" if (os.environ.get("FLASK_SECRET_KEY") or "").strip() else "hard"
+    return (f"SECRET_SET={'True' if sk else 'False'} via={src}"), 200, {
         "Content-Type": "text/plain; charset=utf-8"
     }
 
@@ -91,7 +79,6 @@ def debug_google():
         "GOOGLE_REDIRECT_URI: " + (redir or "(empty)"),
     ]
     return "\n".join(body), 200, {"Content-Type": "text/plain; charset=utf-8"}
-# ---------------------------------------------------------------------------
 
 # --------------------------------- Routes ----------------------------------
 @app.route("/", methods=["GET"])
@@ -114,22 +101,18 @@ def twilio_voice():
     speech_text = (request.form.get("SpeechResult") or request.values.get("SpeechResult") or "").strip()
     print(f"[Twilio] CallSid={call_sid} From={from_number} Speech='{speech_text}'")
 
-    # Первичный вызов — просим речь
     if not speech_text:
         twiml_xml = create_twiml_response(None)
         return Response(twiml_xml, mimetype="text/xml")
 
-    # --- Медицинский диалог (если доступен) ---
     if dialog:
         reply, done, create_flag = dialog.handle(call_sid, speech_text, from_number)
         if create_flag:
-            # Требуется Google OAuth
             if not HAVE_GOOGLE or not load_creds or not load_creds("admin"):
                 reply = f"Чтобы завершить запись, подключите Google: {APP_BASE}/oauth/google/start"
             else:
                 try:
                     s = dialog.get(call_sid).data
-                    # Без внешних зависимостей парсим ISO стандартными средствами
                     from datetime import datetime
                     start_dt = datetime.fromisoformat(s["datetime_iso"])
                     ok, info = create_event(
@@ -155,24 +138,21 @@ def twilio_voice():
             twiml_xml = create_twiml_response(reply)
             return Response(twiml_xml, mimetype="text/xml")
 
-    # --- Обычный Q&A ---
     out = f"Вы сказали: {speech_text}" if ECHO_MODE else get_gpt_response(speech_text)
     twiml_xml = create_twiml_response(out)
     return Response(twiml_xml, mimetype="text/xml")
 
-# ---- Google OAuth (если модули есть) ----
+# ---- Google OAuth ----
 @app.route("/oauth/google/start")
 def oauth_google_start():
     if not HAVE_GOOGLE or not build_flow:
         return "Google OAuth пока не настроен на сервере.", 200
-
     flow = build_flow()
     auth_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
     )
-    # Сохраняем state в сессии — критично для защиты от CSRF и для колбэка
     session["google_oauth_state"] = state
     return redirect(auth_url)
 
@@ -180,20 +160,14 @@ def oauth_google_start():
 def oauth_google_callback():
     if not HAVE_GOOGLE or not build_flow or not save_creds:
         return "Google OAuth пока не настроен на сервере.", 200
-
-    # Достаём state из сессии и пересоздаём Flow с тем же state
     state = session.pop("google_oauth_state", None)
     flow = build_flow(state=state)
-
-    # Подстраховка: если прокси подставил внутренний http, заменим на https
     auth_resp_url = request.url.replace("http://", "https://", 1)
-
-    # Обмен кода на токены
     flow.fetch_token(authorization_response=auth_resp_url)
     save_creds(flow.credentials, "admin")
     return "✅ Google подключён! Можно возвращаться к звонку."
-# ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
