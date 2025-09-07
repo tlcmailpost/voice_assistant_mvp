@@ -1,12 +1,9 @@
+import os
 from flask import Flask, request, Response
 from utils.openai_gpt import get_gpt_response
 from utils.twilio_response import create_twiml_response
 
 app = Flask(__name__)
-
-@app.route("/")
-def index():
-    return "<h1>👋 Привет, Влад!</h1><p>Твой виртуальный ассистент работает! 🚀</p><p>Теперь можно подключать Twilio и GPT для голосового общения.</p>"
 
 @app.route("/twilio-voice", methods=["POST"])
 def voice():
@@ -20,4 +17,5 @@ def voice():
     return Response(twiml, mimetype="text/xml")
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=True, host="0.0.0.0", port=port)
