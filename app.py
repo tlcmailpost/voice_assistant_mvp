@@ -34,6 +34,12 @@ except Exception as e:
     HAVE_SMS = False
 
 app = Flask(__name__)
+from werkzeug.middleware.proxy_fix import ProxyFix
+
+app = Flask(__name__)
+# доверяем заголовкам от Render (Reverse Proxy), чтобы request.url был https
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
+app.config["PREFERRED_URL_SCHEME"] = "https"
 
 ECHO_MODE = os.environ.get("ECHO_MODE", "0") == "1"
 APP_BASE = os.environ.get("APP_BASE_URL", "https://voice-assistant-mvp-9.onrender.com")
