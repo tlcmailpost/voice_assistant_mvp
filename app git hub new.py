@@ -1,23 +1,27 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request
+from twilio_response import twilio_voice_response
 from openai_gpt import get_gpt_response
-from twilio_response import respond_to_call
-import os
 
 app = Flask(__name__)
+
+# Route for health check / homepage
 @app.route("/", methods=["GET"])
 def home():
     return "Voice Assistant is running!"
 
-@app.route("/", methods=["GET"])
-def index():
-    return "Voice Assistant is running!"
-
-@app.route("/voice", methods=["POST"])
+# Route for handling Twilio voice webhook
+@app.route("/twilio-voice", methods=["POST"])
 def voice():
-    response = respond_to_call(request.form)
+    incoming_message = request.form.get("SpeechResult", "")
+    print(f"User said: {incoming_message}")
+
+    # Get response from OpenAI
+    gpt_response = get_gpt_response(incoming_message)
+    print(f"GPT responded: {gpt_response}")
+
+    # Create TwiML voice response
+    response = twilio_voice_response(gpt_response)
     return str(response)
 
-# Главная правка здесь:
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=10000)
