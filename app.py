@@ -131,10 +131,18 @@ def oauth_google_start():
 def oauth_google_callback():
     if not HAVE_GOOGLE or not build_flow or not save_creds:
         return "Google OAuth пока не настроен на сервере.", 200
+
     flow = build_flow()
-    flow.fetch_token(authorization_response=request.url)
+
+    # Подстраховка: если прокси пробросил внутренний http, принудительно делаем https
+    auth_resp_url = request.url.replace("http://", "https://", 1)
+
+    # ВАЖНО: используем auth_resp_url вместо request.url
+    flow.fetch_token(authorization_response=auth_resp_url)
+
     save_creds(flow.credentials, "admin")
     return "✅ Google подключён! Можно возвращаться к звонку."
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
