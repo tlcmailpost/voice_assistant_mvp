@@ -37,18 +37,15 @@ except Exception as e:
     HAVE_SMS = False
 
 app = Flask(__name__)
-from werkzeug.middleware.proxy_fix import ProxyFix
-app = Flask(__name__)
-
-# доверяем заголовкам прокси (Render) и принудительно работаем как https
+# доверяем прокси и фиксируем https
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 app.config["PREFERRED_URL_SCHEME"] = "https"
 
-# сессии
+# >>> ВАЖНО: secret_key до любых обращений к session
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
 app.config.update(
-    SESSION_COOKIE_SECURE=True,   # кука только по https
-    SESSION_COOKIE_SAMESITE="Lax" # кука передаётся при редиректе с того же сайта
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SAMESITE="Lax",
 )
 
 app = Flask(__name__)
