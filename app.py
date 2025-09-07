@@ -1,3 +1,6 @@
+from flask import Flask, request, Response, redirect, session
+from werkzeug.middleware.proxy_fix import ProxyFix
+import os
 # app.py — SAFE BOOT версия
 import os
 from flask import Flask, request, Response, redirect
@@ -35,6 +38,18 @@ except Exception as e:
 
 app = Flask(__name__)
 from werkzeug.middleware.proxy_fix import ProxyFix
+app = Flask(__name__)
+
+# доверяем заголовкам прокси (Render) и принудительно работаем как https
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
+app.config["PREFERRED_URL_SCHEME"] = "https"
+
+# сессии
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+app.config.update(
+    SESSION_COOKIE_SECURE=True,   # кука только по https
+    SESSION_COOKIE_SAMESITE="Lax" # кука передаётся при редиректе с того же сайта
+)
 
 app = Flask(__name__)
 # доверяем заголовкам от Render (Reverse Proxy), чтобы request.url был https
@@ -123,25 +138,36 @@ def twilio_voice():
 def oauth_google_start():
     if not HAVE_GOOGLE or not build_flow:
         return "Google OAuth пока не настроен на сервере.", 200
-    flow = build_flow()
-    auth_url, state = flow.authorization_url(access_type="offline", include_granted_scopes="true", prompt="consent")
+
+    flow = build_flow()  # создаём Flow без state — библиотека сама сгенерирует
+    auth_url, state = flow.authorization_url(
+        access_type="offline",           # нужен refresh_token
+        include_granted_scopes="true",
+        prompt="consent",                # всегда показывать экран согласия
+    )
+    session["google_oauth_state"] = state   # <-- КЛЮЧЕВАЯ СТРОКА: запомнили state
     return redirect(auth_url)
+
 
 @app.route("/oauth/google/callback")
 def oauth_google_callback():
     if not HAVE_GOOGLE or not build_flow or not save_creds:
         return "Google OAuth пока не настроен на сервере.", 200
 
-    flow = build_flow()
+    # достаём state из сессии (и сразу удаляем его)
+    state = session.pop("google_oauth_state", None)
 
-    # Подстраховка: если прокси пробросил внутренний http, принудительно делаем https
+    # пересоздаём Flow С ТЕМ ЖЕ state
+    flow = build_flow(state=state)
+
+    # подстраховка: если внутри виден http, принудительно заменим на https
     auth_resp_url = request.url.replace("http://", "https://", 1)
 
-    # ВАЖНО: используем auth_resp_url вместо request.url
+    # обмениваем код на токены
     flow.fetch_token(authorization_response=auth_resp_url)
-
     save_creds(flow.credentials, "admin")
     return "✅ Google подключён! Можно возвращаться к звонку."
+
 
 
 if __name__ == "__main__":
