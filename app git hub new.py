@@ -4,6 +4,9 @@ from twilio_response import respond_to_call
 import os
 
 app = Flask(__name__)
+@app.route("/", methods=["GET"])
+def home():
+    return "Voice Assistant is running!"
 
 @app.route("/", methods=["GET"])
 def index():
