@@ -57,6 +57,16 @@ APP_BASE = os.environ.get("APP_BASE_URL", "https://voice-assistant-mvp-9.onrende
 CLINIC_NAME = os.environ.get("CLINIC_NAME", "Клиника")
 dialog = MedDialog() if HAVE_MED and MedDialog else None
 
+# >>> ADDED: загрузка system_prompt_en.txt
+PROMPT_FILE = os.path.join(os.path.dirname(__file__), "prompts/system_prompt_en.txt")
+SYSTEM_PROMPT = ""
+if os.path.exists(PROMPT_FILE):
+    with open(PROMPT_FILE, "r", encoding="utf-8") as f:
+        SYSTEM_PROMPT = f.read()
+    print("[app] system prompt loaded")
+else:
+    print("[app] system prompt file not found")
+
 # ------------------------------- Diagnostics -------------------------------
 @app.route("/debug/secret")
 def debug_secret():
@@ -138,7 +148,8 @@ def twilio_voice():
             twiml_xml = create_twiml_response(reply)
             return Response(twiml_xml, mimetype="text/xml")
 
-    out = f"Вы сказали: {speech_text}" if ECHO_MODE else get_gpt_response(speech_text)
+    # >>> ADDED: передача system prompt в get_gpt_response (если нет FSM)
+    out = f"Вы сказали: {speech_text}" if ECHO_MODE else get_gpt_response(speech_text, system_prompt=SYSTEM_PROMPT)
     twiml_xml = create_twiml_response(out)
     return Response(twiml_xml, mimetype="text/xml")
 
