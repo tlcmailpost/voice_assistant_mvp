@@ -1,4 +1,3 @@
-# utils/openai_gpt.py
 import os
 import sys
 import traceback
@@ -7,32 +6,24 @@ from typing import Optional, List
 try:
     from openai import OpenAI
 except Exception:
-    raise RuntimeError("Библиотека 'openai' не установлена. Проверь requirements.txt и деплой.")
+    raise RuntimeError("Library 'openai' is not installed. Check requirements.txt and deploy.")
 
-# --------- Настройки моделей ---------
+# --------- Default Settings ---------
 PREFERRED_MODELS: List[str] = [
-    "gpt-4o-mini",  # быстрый и дешёвый
-    "gpt-4o",       # запасной вариант, мощнее
+    "gpt-4o-mini",  # fast & cheaper
+    "gpt-4o",       # more powerful
 ]
 
-# --------- Загружаем системный промпт ---------
-PROMPT_FILE = os.path.join(os.path.dirname(__file__), "..", "prompts", "system_prompt_en.txt")
-SYSTEM_PROMPT = "You are a polite English-speaking medical voice assistant."
-if os.path.exists(PROMPT_FILE):
-    try:
-        with open(PROMPT_FILE, "r", encoding="utf-8") as f:
-            SYSTEM_PROMPT = f.read().strip()
-        print("[openai_gpt] system prompt loaded from file")
-    except Exception as e:
-        print(f"[openai_gpt] error loading prompt file: {e}", file=sys.stderr)
-else:
-    print("[openai_gpt] system_prompt_en.txt not found, using default")
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a polite, professional voice assistant for a medical clinic. "
+    "Speak naturally, keep answers short (1–3 sentences). "
+    "Never joke, never use inappropriate words."
+)
 
-# --------- Настройки генерации ---------
 MAX_TOKENS = 220
 TEMPERATURE = 0.3
 
-# --------- Клиент OpenAI ---------
+# --------- OpenAI Client ---------
 _api_key = os.environ.get("OPENAI_API_KEY", "").strip()
 if not _api_key:
     print("[openai] OPENAI_API_KEY is missing in environment!", file=sys.stderr)
@@ -40,8 +31,10 @@ if not _api_key:
 _client = OpenAI(api_key=_api_key) if _api_key else None
 
 
-def _call_model(model: str, prompt: str) -> Optional[str]:
-    """Вызывает конкретную модель OpenAI и возвращает ответ."""
+def _call_model(model: str, prompt: str, system_prompt: str) -> Optional[str]:
+    """
+    Try one model call. Return response text or None if error.
+    """
     if not _client:
         return None
     try:
@@ -50,7 +43,7 @@ def _call_model(model: str, prompt: str) -> Optional[str]:
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt.strip()},
             ],
         )
@@ -65,17 +58,24 @@ def _call_model(model: str, prompt: str) -> Optional[str]:
         return None
 
 
-def get_gpt_response(prompt: str) -> str:
-    """Основная функция ассистента. Пытается несколько моделей подряд."""
+def get_gpt_response(prompt: str, system_prompt: Optional[str] = None) -> str:
+    """
+    Main function for assistant.
+    If system_prompt is given → use it.
+    Else → fallback to DEFAULT_SYSTEM_PROMPT.
+    """
     if not prompt or not prompt.strip():
-        return "Sorry, I didn’t catch that. Could you repeat please?"
+        return "I did not hear you. Please repeat."
 
     if not _client:
-        return "OpenAI API key is missing. Please check your configuration."
+        return "OpenAI API key not found. Please check configuration."
 
+    sys_prompt = system_prompt if system_prompt else DEFAULT_SYSTEM_PROMPT
+
+    # Try models in order
     for model in PREFERRED_MODELS:
-        result = _call_model(model, prompt)
+        result = _call_model(model, prompt, sys_prompt)
         if result:
             return result
 
-    return "Sorry, I’m having trouble connecting right now. Please try again in a minute."
+    return "Sorry, I cannot get a response right now. Please try again later."
