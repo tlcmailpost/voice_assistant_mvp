@@ -1,6 +1,7 @@
+# utils/twilio_response.py
 from twilio.twiml.voice_response import VoiceResponse, Gather
 
-VOICE = "alice"   # English voice
+VOICE = "alice"   # Professional English voice
 LANG = "en-US"    # English language
 
 
@@ -29,8 +30,8 @@ def ssml_digits(s: str) -> str:
 
 def create_twiml_response(text: str | None = None, *, hints: str | None = None) -> str:
     """
-    If text is empty → give Gather for speech recognition.
-    If text exists → say response and then continue asking.
+    If text is empty → greet and ask first question.
+    If text exists → read response and continue.
     Supports SSML tags (<say-as interpret-as="digits">...).
     """
     vr = VoiceResponse()
@@ -44,14 +45,16 @@ def create_twiml_response(text: str | None = None, *, hints: str | None = None) 
             timeout=7,
             speech_timeout="auto",
         )
+        # 👇 Warm and professional clinic greeting
         gather.say(
-            "Please speak after the beep. If I didn’t catch it, I will repeat the question.",
+            "Hello, and thank you for calling MedVoice Clinic. "
+            "We are here to help you schedule an appointment or answer your questions. "
+            "To get started, please tell me your full name.",
             voice=VOICE, language=LANG
         )
         vr.append(gather)
         return str(vr)
 
-    # If text has SSML tags <say-as ...>, Twilio will handle them correctly.
     speak_text = _clip(str(text))
     vr.say(speak_text, voice=VOICE, language=LANG)
     vr.pause(length=1)
