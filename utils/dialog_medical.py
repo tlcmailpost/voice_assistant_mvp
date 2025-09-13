@@ -20,6 +20,7 @@ except Exception:
 from .twilio_response import ssml_digits
 
 
+# ------------------- helpers -------------------
 def normalize_name(text: str) -> str:
     t = re.sub(r"\s+", " ", (text or "").strip())
     parts = [p.capitalize() for p in t.split(" ") if p]
@@ -92,6 +93,7 @@ def parse_when(text: str) -> Optional[datetime]:
     return None
 
 
+# ------------------- state -------------------
 @dataclass
 class PatientData:
     full_name: Optional[str] = None
@@ -107,11 +109,8 @@ class PatientData:
         return self.attempts[key]
 
 
+# ------------------- dialog -------------------
 class MedDialog:
-    """
-    FSM: intro -> name -> reason -> when -> dob -> phone -> confirm -> create
-    """
-
     def __init__(self):
         self._sessions: Dict[str, PatientData] = {}
 
