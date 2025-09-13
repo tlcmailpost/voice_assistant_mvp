@@ -30,15 +30,16 @@ def ssml_digits(s: str) -> str:
     return f'Contact number: <say-as interpret-as="digits">{digits_only}</say-as>.'
 
 
-def create_twiml_response(text: str | None = None, *, hints: str | None = None) -> str:
+def create_twiml_response(text: str | None = None, *, hints: str | None = None, first: bool = False) -> str:
     """
     If text is empty → ask user with Gather.
-    If text is given → speak response and continue.
+    If text is given → speak response and wait for next input.
     Supports SSML tags (<say-as interpret-as="digits">...).
     """
     vr = VoiceResponse()
 
     if not text or not str(text).strip():
+        # First greeting
         gather = Gather(
             input="speech",
             language=LANG,
@@ -47,19 +48,24 @@ def create_twiml_response(text: str | None = None, *, hints: str | None = None) 
             timeout=7,
             speech_timeout="auto",
         )
-        # --- Custom greeting instead of "beep" ---
-        gather.say(
-            "Welcome to MedVoice Clinic. Please tell me your full name.",
-            voice=VOICE,
-            language=LANG
-        )
+        greet = "Welcome to MedVoice Clinic. Please tell me your full name." if first else "Please say your answer."
+        gather.say(greet, voice=VOICE, language=LANG)
         vr.append(gather)
         return str(vr)
 
-    # If we already have text, say it
+    # If we already have text, just answer once and open Gather again
     speak_text = _clip(str(text))
     vr.say(speak_text, voice=VOICE, language=LANG)
-    vr.pause(length=1)
-    vr.say("You may continue.", voice=VOICE, language=LANG)
-    vr.redirect("/twilio-voice", method="POST")
+
+    gather = Gather(
+        input="speech",
+        language=LANG,
+        action="/twilio-voice",
+        method="POST",
+        timeout=7,
+        speech_timeout="auto",
+    )
+    gather.say("Please continue.", voice=VOICE, language=LANG)
+    vr.append(gather)
+
     return str(vr)
