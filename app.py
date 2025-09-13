@@ -1,5 +1,6 @@
-# app.py — GPT with external system prompt
+# app.py — GPT-first with per-call history
 import os
+from collections import defaultdict, deque
 from flask import Flask, request, Response, redirect, session
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -7,17 +8,14 @@ app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 app.config["PREFERRED_URL_SCHEME"] = "https"
 
-# --- Secret config ---
 HARD_SECRET = "vK7!qD9#sYp$3Lx@0ZnF4hGt8Rb^2MwUjE1oCk&Va5Tr*NpXgHdWlQfZy!BmRs"
 env_secret = (os.environ.get("FLASK_SECRET_KEY") or "").strip()
 final_secret = env_secret or HARD_SECRET
 app.secret_key = final_secret
 app.config["SECRET_KEY"] = final_secret
 app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_SAMESITE="Lax")
-
 print(f"[flask] SECRET from env? {'yes' if env_secret else 'no (using hard)'}")
 
-# ---------------- Imports ----------------
 from utils.openai_gpt import get_gpt_response
 from utils.twilio_response import create_twiml_response
 
@@ -31,40 +29,10 @@ if os.path.exists(PROMPT_FILE):
 else:
     print("[app] system prompt not found ❌")
 
-# --- Optional FSM (dialog_medical) ---
-try:
-    from utils.dialog_medical import MedDialog
-    HAVE_MED = True
-except Exception as e:
-    print(f"[boot] dialog_medical not available: {e}")
-    MedDialog = None
-    HAVE_MED = False
+# ---- Per-call chat history (in-memory) ----
+# CallSid -> deque of {'role': 'user'|'assistant', 'content': '...'}
+SESSIONS = defaultdict(lambda: deque(maxlen=12))
 
-# --- Optional Google Calendar ---
-try:
-    from utils.google_oauth import build_flow, save_creds, load_creds
-    from utils.calendar import create_event
-    HAVE_GOOGLE = True
-except Exception as e:
-    print(f"[boot] google calendar not available: {e}")
-    build_flow = save_creds = load_creds = create_event = None
-    HAVE_GOOGLE = False
-
-# --- Optional SMS ---
-try:
-    from utils.sms import send_sms
-    HAVE_SMS = True
-except Exception as e:
-    print(f"[boot] sms not available: {e}")
-    def send_sms(*args, **kwargs): return False
-    HAVE_SMS = False
-
-# ---------------- Settings ----------------
-ECHO_MODE = os.environ.get("ECHO_MODE", "0") == "1"
-APP_BASE = os.environ.get("APP_BASE_URL", "https://voice-assistant-mvp-9.onrender.com")
-CLINIC_NAME = os.environ.get("CLINIC_NAME", "MedVoice Clinic")
-
-# ---------------- Routes ----------------
 @app.route("/", methods=["GET"])
 def home():
     return "✅ Voice Assistant is running!"
@@ -85,21 +53,37 @@ def twilio_voice():
     speech_text = (request.form.get("SpeechResult") or request.values.get("SpeechResult") or "").strip()
     print(f"[Twilio] CallSid={call_sid} From={from_number} Speech='{speech_text}'")
 
-    # === No speech → trigger first greeting ===
+    # ПЕРВОЕ обращение в звонке → приветствие
     if not speech_text:
+        # Очистим историю на старте звонка (подстраховка)
+        if call_sid:
+            SESSIONS.pop(call_sid, None)
         twiml_xml = create_twiml_response(None, first=True)
         return Response(twiml_xml, mimetype="text/xml")
 
-    # === GPT mode ===
-    out = (
-        f"You said: {speech_text}"
-        if ECHO_MODE
-        else get_gpt_response(speech_text, system_prompt=SYSTEM_PROMPT)
-    )
+    # История для этого звонка
+    hist = list(SESSIONS.get(call_sid, deque()))
+    # Добавляем текущую реплику пользователя
+    if call_sid:
+        SESSIONS[call_sid].append({"role": "user", "content": speech_text})
+
+    # Получаем ответ GPT с учётом истории
+    out = get_gpt_response(speech_text, system_prompt=SYSTEM_PROMPT, history=hist)
+
+    # Кладём ответ ассистента в историю
+    if call_sid and out:
+        SESSIONS[call_sid].append({"role": "assistant", "content": out})
+
+    # Отдаём TwiML
     twiml_xml = create_twiml_response(out)
     return Response(twiml_xml, mimetype="text/xml")
 
-# ---------------------------------------------------------------------------
+# --- Optional: endpoint to clear a call session (если подключишь статус-хуки Twilio)
+@app.route("/debug/clear/<sid>")
+def debug_clear(sid: str):
+    SESSIONS.pop(sid, None)
+    return f"Cleared session for {sid}", 200
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
