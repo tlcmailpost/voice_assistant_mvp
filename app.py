@@ -1,31 +1,27 @@
-# app.py — HARD-SET SECRET (clean safe boot)
+# app.py — clean GPT-first mode with optional FSM toggle
 import os
 from flask import Flask, request, Response, redirect, session
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # -------------------- Flask app + proxy & session config --------------------
 app = Flask(__name__)
-
-# доверяем прокси Render (https) и явно https-схему
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
 app.config["PREFERRED_URL_SCHEME"] = "https"
 
-# Жёсткий секрет как запасной (чтобы точно не падало)
+# Hard secret fallback (keeps app booting even if env missing)
 HARD_SECRET = "vK7!qD9#sYp$3Lx@0ZnF4hGt8Rb^2MwUjE1oCk&Va5Tr*NpXgHdWlQfZy!BmRs"
 env_secret = (os.environ.get("FLASK_SECRET_KEY") or "").strip()
 final_secret = env_secret or HARD_SECRET
 app.secret_key = final_secret
 app.config["SECRET_KEY"] = final_secret
-app.config.update(
-    SESSION_COOKIE_SECURE=True,
-    SESSION_COOKIE_SAMESITE="Lax",
-)
+app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_SAMESITE="Lax")
 print(f"[flask] SECRET from env? {'yes' if env_secret else 'no (using hard)'}")
 
-# ----------------------------- Optional imports ----------------------------
+# ----------------------------- Imports ----------------------------
 from utils.openai_gpt import get_gpt_response
 from utils.twilio_response import create_twiml_response
 
+# Optional: FSM (dialog_medical)
 try:
     from utils.dialog_medical import MedDialog
     HAVE_MED = True
@@ -34,6 +30,7 @@ except Exception as e:
     MedDialog = None
     HAVE_MED = False
 
+# Optional: Google Calendar
 try:
     from utils.google_oauth import build_flow, save_creds, load_creds
     from utils.calendar import create_event
@@ -43,6 +40,7 @@ except Exception as e:
     build_flow = save_creds = load_creds = create_event = None
     HAVE_GOOGLE = False
 
+# Optional: SMS
 try:
     from utils.sms import send_sms
     HAVE_SMS = True
@@ -54,27 +52,19 @@ except Exception as e:
 # ------------------------------- App settings ------------------------------
 ECHO_MODE = os.environ.get("ECHO_MODE", "0") == "1"
 APP_BASE = os.environ.get("APP_BASE_URL", "https://voice-assistant-mvp-9.onrender.com")
-CLINIC_NAME = os.environ.get("CLINIC_NAME", "Clinic")
-dialog = MedDialog() if HAVE_MED and MedDialog else None
+CLINIC_NAME = os.environ.get("CLINIC_NAME", "MedVoice Clinic")
 
-# >>> ADDED: загрузка system_prompt_en.txt
-PROMPT_FILE = os.path.join(os.path.dirname(__file__), "prompts/system_prompt_en.txt")
-SYSTEM_PROMPT = ""
-if os.path.exists(PROMPT_FILE):
-    with open(PROMPT_FILE, "r", encoding="utf-8") as f:
-        SYSTEM_PROMPT = f.read()
-    print("[app] system prompt loaded")
-else:
-    print("[app] system prompt file not found")
+# ✅ Тумблер: использовать FSM или чистый GPT
+USE_FSM = os.environ.get("USE_FSM", "0") == "1"
+dialog = (MedDialog() if (HAVE_MED and MedDialog and USE_FSM) else None)
+print(f"[mode] USE_FSM={USE_FSM}")
 
 # ------------------------------- Diagnostics -------------------------------
 @app.route("/debug/secret")
 def debug_secret():
     sk = app.config.get("SECRET_KEY")
     src = "env" if (os.environ.get("FLASK_SECRET_KEY") or "").strip() else "hard"
-    return (f"SECRET_SET={'True' if sk else 'False'} via={src}"), 200, {
-        "Content-Type": "text/plain; charset=utf-8"
-    }
+    return (f"SECRET_SET={'True' if sk else 'False'} via={src}"), 200, {"Content-Type":"text/plain; charset=utf-8"}
 
 @app.route("/debug/google")
 def debug_google():
@@ -100,8 +90,8 @@ def twilio_voice():
     if request.method == "GET":
         twiml_xml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
-            '<Response><Say language="en-US" voice="alice">'
-            'Webhook is ready. Please use POST for speech recognition.'
+            '<Response><Say language="en-US" voice="Polly.Joanna">'
+            'Webhook is ready. Use POST for speech recognition.'
             '</Say></Response>'
         )
         return Response(twiml_xml, mimetype="text/xml")
@@ -111,35 +101,47 @@ def twilio_voice():
     speech_text = (request.form.get("SpeechResult") or request.values.get("SpeechResult") or "").strip()
     print(f"[Twilio] CallSid={call_sid} From={from_number} Speech='{speech_text}'")
 
+    # Если пусто — вернём Gather (приветствие/вопрос делает twilio_response)
     if not speech_text:
         twiml_xml = create_twiml_response(None)
         return Response(twiml_xml, mimetype="text/xml")
 
+    # ===== РЕЖИМ FSM (если включён) =====
     if dialog:
-        reply, done, create_flag = dialog.handle(call_sid, speech_text, from_number)
+        try:
+            reply, done, create_flag = dialog.handle(call_sid, speech_text, from_number)
+        except Exception as e:
+            print(f"[dialog] ERROR: {e}")
+            reply, done, create_flag = "Sorry, something went wrong. Let’s try again.", False, False
+
         if create_flag:
             if not HAVE_GOOGLE or not load_creds or not load_creds("admin"):
-                reply = f"To finish booking, please connect Google: {APP_BASE}/oauth/google/start"
+                reply = f"To finish booking, connect Google Calendar: {APP_BASE}/oauth/google/start"
             else:
                 try:
-                    s = dialog.get(call_sid).data
-                    from datetime import datetime
-                    start_dt = datetime.fromisoformat(s["datetime_iso"])
+                    # ⚠️ Здесь зависит от реализации твоего MedDialog; оставляем как есть.
+                    s = dialog.get(call_sid)  # получаем объект состояния
+                    # Ожидается, что у тебя есть поля s.full_name / s.reason / s.when_dt / s.dob / s.phone_e164
+                    start_dt = getattr(s, "when_dt", None)
+                    if not start_dt:
+                        raise RuntimeError("start_dt is missing")
+                    dob_str = s.dob.strftime("%Y-%m-%d") if getattr(s, "dob", None) else "-"
+                    phone_txt = getattr(s, "phone_e164", "-")
                     ok, info = create_event(
-                        summary=f"{CLINIC_NAME}: {s.get('full_name','Patient')} / {s.get('reason','Appointment')}",
+                        summary=f"{CLINIC_NAME}: {getattr(s,'full_name','Patient')} / {getattr(s,'reason','appointment')}",
                         start_dt=start_dt,
-                        description=f"DOB: {s.get('dob_str','-')}, Phone: {s.get('phone','-')}"
+                        description=f"DOB: {dob_str}, Phone: {phone_txt}"
                     )
                     if ok:
-                        reply = "Your appointment has been created. A link has been sent via SMS."
-                        if HAVE_SMS:
-                            sms_body = f"{CLINIC_NAME}: appointment {s.get('datetime_str')} — {s.get('reason','appointment')}."
-                            send_sms(s.get('phone',''), sms_body)
+                        reply = "Your appointment is created. I’ve sent you an SMS confirmation."
+                        if HAVE_SMS and phone_txt and phone_txt.startswith("+"):
+                            sms_body = f"{CLINIC_NAME}: {getattr(s,'reason','appointment')} on {start_dt}."
+                            send_sms(phone_txt, sms_body)
                     else:
-                        reply = f"Failed to create event: {info}"
+                        reply = f"Couldn’t create the calendar event: {info}"
                 except Exception as e:
                     print(f"[calendar] error: {e}")
-                    reply = "Could not create the event right now. Please try again later."
+                    reply = "I can’t create the appointment right now. Please try again later."
             dialog.reset(call_sid)
             twiml_xml = create_twiml_response(reply)
             return Response(twiml_xml, mimetype="text/xml")
@@ -148,8 +150,13 @@ def twilio_voice():
             twiml_xml = create_twiml_response(reply)
             return Response(twiml_xml, mimetype="text/xml")
 
-    # >>> ADDED: передача system prompt в get_gpt_response (если нет FSM)
-    out = f"You said: {speech_text}" if ECHO_MODE else get_gpt_response(speech_text, system_prompt=SYSTEM_PROMPT)
+        # fallback
+        out = get_gpt_response(speech_text)
+        twiml_xml = create_twiml_response(out)
+        return Response(twiml_xml, mimetype="text/xml")
+
+    # ===== РЕЖИМ GPT (FSM выключен) =====
+    out = (f"You said: {speech_text}" if ECHO_MODE else get_gpt_response(speech_text))
     twiml_xml = create_twiml_response(out)
     return Response(twiml_xml, mimetype="text/xml")
 
@@ -157,12 +164,10 @@ def twilio_voice():
 @app.route("/oauth/google/start")
 def oauth_google_start():
     if not HAVE_GOOGLE or not build_flow:
-        return "Google OAuth is not set up on the server yet.", 200
+        return "Google OAuth is not configured on the server yet.", 200
     flow = build_flow()
     auth_url, state = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent",
+        access_type="offline", include_granted_scopes="true", prompt="consent",
     )
     session["google_oauth_state"] = state
     return redirect(auth_url)
@@ -170,7 +175,7 @@ def oauth_google_start():
 @app.route("/oauth/google/callback")
 def oauth_google_callback():
     if not HAVE_GOOGLE or not build_flow or not save_creds:
-        return "Google OAuth is not set up on the server yet.", 200
+        return "Google OAuth is not configured on the server yet.", 200
     state = session.pop("google_oauth_state", None)
     flow = build_flow(state=state)
     auth_resp_url = request.url.replace("http://", "https://", 1)
