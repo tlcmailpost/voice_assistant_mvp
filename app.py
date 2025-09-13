@@ -54,7 +54,7 @@ ECHO_MODE = os.environ.get("ECHO_MODE", "0") == "1"
 APP_BASE = os.environ.get("APP_BASE_URL", "https://voice-assistant-mvp-9.onrender.com")
 CLINIC_NAME = os.environ.get("CLINIC_NAME", "MedVoice Clinic")
 
-# ✅ Тумблер: использовать FSM или чистый GPT
+# ✅ Toggle FSM / pure GPT
 USE_FSM = os.environ.get("USE_FSM", "0") == "1"
 dialog = (MedDialog() if (HAVE_MED and MedDialog and USE_FSM) else None)
 print(f"[mode] USE_FSM={USE_FSM}")
@@ -101,12 +101,12 @@ def twilio_voice():
     speech_text = (request.form.get("SpeechResult") or request.values.get("SpeechResult") or "").strip()
     print(f"[Twilio] CallSid={call_sid} From={from_number} Speech='{speech_text}'")
 
-    # Если пусто — вернём Gather (приветствие/вопрос делает twilio_response)
+    # Если пусто → первое обращение (приветствие)
     if not speech_text:
-        twiml_xml = create_twiml_response(None)
+        twiml_xml = create_twiml_response(None, first=True)
         return Response(twiml_xml, mimetype="text/xml")
 
-    # ===== РЕЖИМ FSM (если включён) =====
+    # ===== FSM mode =====
     if dialog:
         try:
             reply, done, create_flag = dialog.handle(call_sid, speech_text, from_number)
@@ -119,9 +119,7 @@ def twilio_voice():
                 reply = f"To finish booking, connect Google Calendar: {APP_BASE}/oauth/google/start"
             else:
                 try:
-                    # ⚠️ Здесь зависит от реализации твоего MedDialog; оставляем как есть.
-                    s = dialog.get(call_sid)  # получаем объект состояния
-                    # Ожидается, что у тебя есть поля s.full_name / s.reason / s.when_dt / s.dob / s.phone_e164
+                    s = dialog.get(call_sid)
                     start_dt = getattr(s, "when_dt", None)
                     if not start_dt:
                         raise RuntimeError("start_dt is missing")
@@ -150,12 +148,11 @@ def twilio_voice():
             twiml_xml = create_twiml_response(reply)
             return Response(twiml_xml, mimetype="text/xml")
 
-        # fallback
         out = get_gpt_response(speech_text)
         twiml_xml = create_twiml_response(out)
         return Response(twiml_xml, mimetype="text/xml")
 
-    # ===== РЕЖИМ GPT (FSM выключен) =====
+    # ===== GPT mode =====
     out = (f"You said: {speech_text}" if ECHO_MODE else get_gpt_response(speech_text))
     twiml_xml = create_twiml_response(out)
     return Response(twiml_xml, mimetype="text/xml")
