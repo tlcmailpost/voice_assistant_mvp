@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Tuple
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
 try:
     import dateparser  # requires: dateparser==1.2.0
@@ -19,7 +19,7 @@ except Exception:
 from .twilio_response import ssml_digits
 
 
-# --------------------------- helpers ---------------------------
+# --------------------------- helper functions ---------------------------
 
 def normalize_name(text: str) -> str:
     t = re.sub(r"\s+", " ", (text or "").strip())
@@ -29,12 +29,12 @@ def normalize_name(text: str) -> str:
 
 def parse_reason(text: str) -> str:
     t = (text or "").lower()
-    if any(w in t for w in ["clean", "hygiene"]):
+    if any(w in t for w in ["cleaning", "hygiene", "clean"]):
         return "Cleaning"
-    if "consult" in t:
+    if any(w in t for w in ["consult", "consultation"]):
         return "Consultation"
-    if any(w in t for w in ["pain", "hurt", "urgent"]):
-        return "Urgent check"
+    if any(w in t for w in ["pain", "hurt", "emergency", "urgent"]):
+        return "Emergency visit"
     return t.strip().capitalize() or "Appointment"
 
 
@@ -43,7 +43,7 @@ def parse_dob(text: str) -> Optional[datetime]:
         return None
     if dateparser:
         dt = dateparser.parse(text, languages=["en"], settings={"PREFER_DAY_OF_MONTH": "first"})
-        if dt and dt.year and 1900 < dt.year < datetime.now().year + 1:
+        if dt and dt.year and dt.year > 1900 and dt.year < datetime.now().year + 1:
             return dt
     m = re.search(r"(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})", text)
     if m:
@@ -87,7 +87,7 @@ def parse_when(text: str) -> Optional[datetime]:
     if dateparser:
         dp = dateparser.parse(text, languages=["en"], settings={"PREFER_DATES_FROM": "future"})
         if dp:
-            if dp.hour == 0 and dp.minute == 0 and not any(x in text for x in [":", "am", "pm", "hour"]):
+            if dp.hour == 0 and dp.minute == 0 and not any(x in text for x in [":", "am", "pm"]):
                 dp = dp.replace(hour=10, minute=0)
             return dp.replace(second=0, microsecond=0)
     return None
@@ -129,109 +129,119 @@ class MedDialog:
         if call_sid in self._sessions:
             del self._sessions[call_sid]
 
-    def handle(self, call_sid: str, user_text: str, from_number: str) -> Tuple[str, bool, bool]:
-        s = self.get(call_sid)
-
-        # if all filled, wait for confirm
-        if s.full_name and s.reason and s.when_dt and s.dob and s.phone_e164:
-            return self.handle_confirm(call_sid, user_text)
-
-        return self._handle_collect(call_sid, user_text)
-
     def _handle_collect(self, call_sid: str, user_text: str) -> Tuple[str, bool, bool]:
         s = self.get(call_sid)
         txt = (user_text or "").strip()
 
-        # 0) INTRO
-        if not s.attempts.get("intro"):
-            s.attempts["intro"] = 1
-            return (
-                "👋 Welcome to MedVoice AI Clinic! "
-                "I will help you schedule your appointment. "
-                "First, please tell me your full name."
-            ), False, False
-
         # 1) NAME
         if not s.full_name:
-            if not txt:
-                return "Please tell me your full name.", False, False
-            s.full_name = normalize_name(txt)
+            if len(txt.split()) <= 2 or any(w in txt.lower() for w in ["my name is", "i am", "this is"]):
+                m = re.search(r"(?:my name is|i am|this is)\s+([A-Za-z][\w\- ]+)$", txt, re.IGNORECASE)
+                if m:
+                    s.full_name = normalize_name(m.group(1))
+                else:
+                    s.inc("name")
+                    return "Please tell me your full name.", False, False
+            else:
+                if any(k in txt.lower() for k in ["cleaning", "consult", "pain", "visit"]):
+                    pass
+                else:
+                    s.full_name = normalize_name(txt)
+
+            if not s.full_name:
+                s.inc("name")
+                return "Can you repeat your full name?", False, False
             txt = ""
 
         # 2) REASON
         if not s.reason:
             if not txt:
-                return "What is the reason for your visit? For example: consultation, cleaning, or urgent check.", False, False
+                s.inc("reason")
+                return "What is the reason for your visit? For example: cleaning, consultation, emergency.", False, False
             s.reason = parse_reason(txt)
             txt = ""
 
         # 3) WHEN
         if not s.when_dt:
             if not txt:
-                return "When would you like to come? For example: tomorrow at 3:30 PM, or September 10th at 10 AM.", False, False
+                s.inc("when")
+                return "When would you like to come in? For example: tomorrow at 3:30 pm or September 10 at 10 am.", False, False
             when = parse_when(txt)
             if not when:
-                return "I didn’t catch the date and time. Please repeat, for example: tomorrow at 11:00 AM.", False, False
+                if s.inc("when") < 3:
+                    return "I didn’t catch the date and time. Please repeat, for example: the day after tomorrow at 11 am.", False, False
+                else:
+                    return "Please say the date and exact time, for example: September 10 at 10:00 am.", False, False
             s.when_dt = when
             txt = ""
 
         # 4) DOB
         if not s.dob:
             if not txt:
-                return "Please provide your date of birth. For example: May 15, 1980.", False, False
+                s.inc("dob")
+                return "Please tell me your date of birth, for example: May 15 1980 or 05/15/1980.", False, False
             dob = parse_dob(txt)
             if not dob:
-                return "I didn’t catch your date of birth. Please repeat.", False, False
+                if s.inc("dob") < 3:
+                    return "I didn’t catch your date of birth. Can you repeat it?", False, False
+                else:
+                    return "Say your date of birth in full: day, month, year.", False, False
             s.dob = dob
             txt = ""
 
         # 5) PHONE
         if not s.phone_e164:
             if not txt:
-                return "Please say your contact phone number, slowly, digit by digit.", False, False
+                s.inc("phone")
+                return "Please provide a contact phone number. Say it digit by digit or in small groups.", False, False
             e164, ssml = parse_phone(txt, default_region="US")
             if not e164:
-                return "I didn’t catch your phone number. Please repeat slowly.", False, False
+                if s.inc("phone") < 3:
+                    return "I didn’t catch the phone number. Please repeat it slowly, digit by digit.", False, False
+                else:
+                    return "Say the number again, for example: seven one eight, eight four four, one zero zero seven.", False, False
             s.phone_e164 = e164
             s.phone_ssml = ssml
             txt = ""
 
-        # 6) CONFIRM
-        dob_str = s.dob.strftime("%d.%m.%Y") if s.dob else "-"
-        dt_str = s.when_dt.strftime("%d.%m.%Y at %H:%M") if s.when_dt else "-"
+        # CONFIRM
+        dob_str = s.dob.strftime("%m/%d/%Y") if s.dob else "-"
+        dt_str = s.when_dt.strftime("%m/%d/%Y at %I:%M %p") if s.when_dt else "-"
 
-        confirm_text = (
-            f"Let’s confirm. {s.full_name}. "
-            f"Reason: {s.reason}. "
-            f"Date and time: {dt_str}. "
-            f"Date of birth: {dob_str}. "
-            f"Phone: {s.phone_ssml if s.phone_ssml else ''} "
-            "If this is correct, please say 'confirm'. "
-            "If you need to change something, just say what to fix."
-        )
-
+        confirm_text = (f"Let’s confirm. Name: {s.full_name}. "
+                        f"Reason: {s.reason}. "
+                        f"Date and time: {dt_str}. "
+                        f"Date of birth: {dob_str}. "
+                        f"Phone: {s.phone_ssml if s.phone_ssml else ''} "
+                        f"If everything is correct, say 'confirm'. "
+                        f"If something needs to be changed, please say what exactly.")
         return confirm_text, False, False
 
     def handle_confirm(self, call_sid: str, user_text: str) -> Tuple[str, bool, bool]:
         s = self.get(call_sid)
         t = (user_text or "").lower().strip()
-        if any(w in t for w in ["confirm", "yes", "correct"]):
+        if any(w in t for w in ["confirm", "yes", "correct", "that’s right", "confirmed"]):
             return "Creating your appointment…", True, True
         if "name" in t:
             s.full_name = None
             return "Please repeat your full name.", False, False
-        if "reason" in t:
+        if "reason" in t or "visit" in t:
             s.reason = None
-            return "Please tell me the reason for your visit.", False, False
+            return "Please state the reason for your visit.", False, False
         if "date" in t or "time" in t:
             s.when_dt = None
-            return "Please tell me the exact date and time, for example: September 10th at 10:00 AM.", False, False
+            return "Please say the date and time, for example: September 10 at 10 am.", False, False
         if "birth" in t:
             s.dob = None
-            return "Please say your full date of birth: day, month, year.", False, False
+            return "Please say your date of birth: day, month, year.", False, False
         if "phone" in t or "number" in t:
             s.phone_e164 = None
             s.phone_ssml = None
-            return "Please repeat your phone number.", False, False
+            return "Please say your phone number digit by digit.", False, False
+        return "If everything is correct, please say 'confirm'. Or tell me what needs to be corrected.", False, False
 
-        return "If everything is correct, please say 'confirm'. Or tell me what to change.", False, False
+    def handle(self, call_sid: str, user_text: str, from_number: str) -> Tuple[str, bool, bool]:
+        s = self.get(call_sid)
+        if s.full_name and s.reason and s.when_dt and s.dob and s.phone_e164:
+            return self.handle_confirm(call_sid, user_text)
+        return self._handle_collect(call_sid, user_text)
