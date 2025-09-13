@@ -54,7 +54,7 @@ except Exception as e:
 # ------------------------------- App settings ------------------------------
 ECHO_MODE = os.environ.get("ECHO_MODE", "0") == "1"
 APP_BASE = os.environ.get("APP_BASE_URL", "https://voice-assistant-mvp-9.onrender.com")
-CLINIC_NAME = os.environ.get("CLINIC_NAME", "Клиника")
+CLINIC_NAME = os.environ.get("CLINIC_NAME", "Clinic")
 dialog = MedDialog() if HAVE_MED and MedDialog else None
 
 # >>> ADDED: загрузка system_prompt_en.txt
@@ -100,8 +100,8 @@ def twilio_voice():
     if request.method == "GET":
         twiml_xml = (
             '<?xml version="1.0" encoding="UTF-8"?>'
-            '<Response><Say language="ru-RU" voice="alice">'
-            'Webhook готов. Используйте POST для распознавания речи.'
+            '<Response><Say language="en-US" voice="alice">'
+            'Webhook is ready. Please use POST for speech recognition.'
             '</Say></Response>'
         )
         return Response(twiml_xml, mimetype="text/xml")
@@ -119,27 +119,27 @@ def twilio_voice():
         reply, done, create_flag = dialog.handle(call_sid, speech_text, from_number)
         if create_flag:
             if not HAVE_GOOGLE or not load_creds or not load_creds("admin"):
-                reply = f"Чтобы завершить запись, подключите Google: {APP_BASE}/oauth/google/start"
+                reply = f"To finish booking, please connect Google: {APP_BASE}/oauth/google/start"
             else:
                 try:
                     s = dialog.get(call_sid).data
                     from datetime import datetime
                     start_dt = datetime.fromisoformat(s["datetime_iso"])
                     ok, info = create_event(
-                        summary=f"{CLINIC_NAME}: {s.get('full_name','Пациент')} / {s.get('reason','приём')}",
+                        summary=f"{CLINIC_NAME}: {s.get('full_name','Patient')} / {s.get('reason','Appointment')}",
                         start_dt=start_dt,
                         description=f"DOB: {s.get('dob_str','-')}, Phone: {s.get('phone','-')}"
                     )
                     if ok:
-                        reply = "Запись создана. Ссылка отправлена в SMS."
+                        reply = "Your appointment has been created. A link has been sent via SMS."
                         if HAVE_SMS:
-                            sms_body = f"{CLINIC_NAME}: запись {s.get('datetime_str')} — {s.get('reason','приём')}."
+                            sms_body = f"{CLINIC_NAME}: appointment {s.get('datetime_str')} — {s.get('reason','appointment')}."
                             send_sms(s.get('phone',''), sms_body)
                     else:
-                        reply = f"Не удалось создать событие: {info}"
+                        reply = f"Failed to create event: {info}"
                 except Exception as e:
                     print(f"[calendar] error: {e}")
-                    reply = "Не удалось создать событие сейчас. Попробуйте позднее."
+                    reply = "Could not create the event right now. Please try again later."
             dialog.reset(call_sid)
             twiml_xml = create_twiml_response(reply)
             return Response(twiml_xml, mimetype="text/xml")
@@ -149,7 +149,7 @@ def twilio_voice():
             return Response(twiml_xml, mimetype="text/xml")
 
     # >>> ADDED: передача system prompt в get_gpt_response (если нет FSM)
-    out = f"Вы сказали: {speech_text}" if ECHO_MODE else get_gpt_response(speech_text, system_prompt=SYSTEM_PROMPT)
+    out = f"You said: {speech_text}" if ECHO_MODE else get_gpt_response(speech_text, system_prompt=SYSTEM_PROMPT)
     twiml_xml = create_twiml_response(out)
     return Response(twiml_xml, mimetype="text/xml")
 
@@ -157,7 +157,7 @@ def twilio_voice():
 @app.route("/oauth/google/start")
 def oauth_google_start():
     if not HAVE_GOOGLE or not build_flow:
-        return "Google OAuth пока не настроен на сервере.", 200
+        return "Google OAuth is not set up on the server yet.", 200
     flow = build_flow()
     auth_url, state = flow.authorization_url(
         access_type="offline",
@@ -170,13 +170,13 @@ def oauth_google_start():
 @app.route("/oauth/google/callback")
 def oauth_google_callback():
     if not HAVE_GOOGLE or not build_flow or not save_creds:
-        return "Google OAuth пока не настроен на сервере.", 200
+        return "Google OAuth is not set up on the server yet.", 200
     state = session.pop("google_oauth_state", None)
     flow = build_flow(state=state)
     auth_resp_url = request.url.replace("http://", "https://", 1)
     flow.fetch_token(authorization_response=auth_resp_url)
     save_creds(flow.credentials, "admin")
-    return "✅ Google подключён! Можно возвращаться к звонку."
+    return "✅ Google connected! You can return to the call."
 
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
